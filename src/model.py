@@ -13,11 +13,12 @@ from nltk.translate.bleu_score import corpus_bleu
 torch.cuda.empty_cache()
 # Paso 1: Preprocesamiento de datos
 # Carga de datos desde SQLite
-current_dir = os.getcwd()
-db_path = os.path.join(current_dir, r"text\en-es\ccmatrix.db")
+current_dir = os.path.dirname(os.path.abspath(__file__))
+db_path = os.path.join(current_dir, "../en-es/ccmatrix.db")
+print(db_path)
 conn = sqlite3.connect(db_path)     # hacemos que la conexión sea solo una y no esté abriendo y cerrando
 try:
-    db_path = os.path.join(current_dir, r"text\en-es\ccmatrix.db")
+    db_path = os.path.join(current_dir, "../en-es/ccmatrix.db")
     # Función para cargar los datos desde la base de datos SQLite
     def load_data_from_sqlite(conn, db_path, min_score=1.1, batch_size=1000, offset=0):
         
@@ -181,7 +182,7 @@ try:
         optimizer = optim.Adam(model.parameters(), lr=0.001)
 
         # Intentar cargar el checkpoint si existe
-        checkpoint_path = os.path.join("../model/checkpoint.pth")
+        checkpoint_path = os.path.join(current_dir,"..","model","checkpoint.pth")
         start_epoch = 0
         if os.path.exists(checkpoint_path):
             print(f"⚠️ Cargando checkpoint desde {checkpoint_path}")
@@ -214,12 +215,14 @@ try:
             print("⚠️ No se encontró el token <PAD> en el vocabulario de español.")
             # Puedes asignar un valor de relleno a <PAD> si no está
             spanish_vocab['<PAD>'] = len(spanish_vocab)
-
+        print("Es en el punto 1")
+        X_val_tensor_path = os.path.join(current_dir,"../model/X_val_tensor.pt")
+        y_val_tensor_path = os.path.join(current_dir,"../model/y_val_tensor.pt")
         # Cargar tensores de validación si existen
-        if os.path.exists("../model/X_val_tensor.pt") and os.path.exists("../model/y_val_tensor.pt"):
+        if os.path.exists(os.path.join(current_dir, X_val_tensor_path)) and os.path.exists(os.path.join(current_dir,y_val_tensor_path)):
             print("📂 Cargando tensores de validación desde disco...")
-            X_val_tensor = torch.load("../model/X_val_tensor.pt").to(device)
-            y_val_tensor = torch.load("../model/y_val_tensor.pt").to(device)
+            X_val_tensor = torch.load(X_val_tensor_path).to(device)
+            y_val_tensor = torch.load(y_val_tensor_path).to(device)
         else:
             print("⚠️ Tensores de validación no encontrados. Necesitas generarlos primero.")
             return
@@ -313,10 +316,12 @@ try:
 
         with open("spanish_vocab.pkl", "wb") as f:
             pickle.dump(spanish_vocab, f)
-
+    print("Es en el punto 2")
+    X_val_tensor_path = os.path.join(current_dir, "..","model","X_val_tensor.pt")
+    y_val_tensor_path = os.path.join(current_dir, "../model/y_val_tensor.pt")
     # Guardar tensores de validación (solo la primera vez)
-    torch.save(X_val_tensor, "../model/X_val_tensor.pt")
-    torch.save(y_val_tensor, "../model/y_val_tensor.pt")
+    torch.save(X_val_tensor, X_val_tensor_path)
+    torch.save(y_val_tensor, y_val_tensor_path)
     print("✅ Tensores de validación guardados.")
 
     # Entrenar el modelo

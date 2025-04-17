@@ -10,7 +10,7 @@ import re
 # Paso 1: Preprocesamiento de datos
 # Carga de datos desde SQLite
 current_dir = os.getcwd()
-db_path = os.path.join(current_dir, r"text\en-es\ccmatrix.db")
+db_path = os.path.join(current_dir, r"text-translation\en-es\ccmatrix.db")
 
 # Función para cargar los datos desde la base de datos SQLite
 def load_data_from_sqlite(db_path, min_score=1.1, limit=None):
