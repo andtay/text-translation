@@ -88,10 +88,33 @@ try:
     # Paso 2: Definir el modelo Seq2Seq
     import torch.nn as nn
 
+    # Módulo de Atención (Luong-style)
+    class Attention(nn.Module):
+        def __init__(self, hidden_dim):
+            super(Attention, self).__init__()
+            self.attn = nn.Linear(hidden_dim * 2, hidden_dim)
+            self.v = nn.Parameter(torch.rand(hidden_dim))
+
+        def forward(self, hidden, encoder_outputs):
+            # hidden: [batch_size, hidden_dim] (último estado oculto del decoder)
+            # encoder_outputs: [batch_size, src_len, hidden_dim]
+
+            src_len = encoder_outputs.shape[1]
+            hidden = hidden.unsqueeze(1).repeat(1, src_len, 1)  # [batch_size, src_len, hidden_dim]
+            energy = torch.tanh(self.attn(torch.cat((hidden, encoder_outputs), dim=2)))  # [batch_size, src_len, hidden_dim]
+            energy = energy.transpose(1, 2)  # [batch_size, hidden_dim, src_len]
+
+            v = self.v.repeat(encoder_outputs.size(0), 1).unsqueeze(1)  # [batch_size, 1, hidden_dim]
+            attention = torch.bmm(v, energy).squeeze(1)  # [batch_size, src_len]
+            return torch.softmax(attention, dim=1)
+
+
     class Seq2SeqModel(nn.Module):
         def __init__(self, input_dim, output_dim, embedding_dim, hidden_dim, n_layers=2, dropout=0.1):
             super(Seq2SeqModel, self).__init__()
-            
+
+            self.attn_combine = nn.Linear(embedding_dim + hidden_dim, embedding_dim)
+
             # Embedding para las secuencias de entrada
             self.encoder_embedding = nn.Embedding(input_dim, embedding_dim)
             self.decoder_embedding = nn.Embedding(output_dim, embedding_dim)
@@ -106,32 +129,54 @@ try:
             self.fc_out = nn.Linear(hidden_dim, output_dim)
             
             # Capa de atención (opcional, pero ayuda mucho en traducción)
-            self.attention = nn.Linear(hidden_dim * 2, hidden_dim)
+            self.attention = Attention(hidden_dim)
             #self.attention_score = nn.Linear(hidden_dim, 1)  # Para calcular la puntuación de atención
 
 
         def forward(self, src, trg):
-            # Embedding de las secuencias de entrada y salida
+            # src: [batch_size, src_len]
+            # trg: [batch_size, trg_len]
+            
+            batch_size = src.shape[0]
+            trg_len = trg.shape[1]
+            output_dim = self.fc_out.out_features
+
             src_embedded = self.encoder_embedding(src)
+            encoder_outputs, (hidden, cell) = self.encoder_lstm(src_embedded)  # encoder_outputs: [batch, src_len, hidden_dim]
+
             trg_embedded = self.decoder_embedding(trg)
-            
-            # Encoder
-            encoder_output, (hidden, cell) = self.encoder_lstm(src_embedded)
-            
-            # Decoder
-            decoder_output, _ = self.decoder_lstm(trg_embedded, (hidden, cell))
-            
-            # Output layer
-            output = self.fc_out(decoder_output)
-            
-            return output
+
+            outputs = torch.zeros(batch_size, trg_len, output_dim).to(src.device)
+
+            decoder_input = trg_embedded[:, 0, :].unsqueeze(1)  # inicializa con <sos>
+
+            for t in range(1, trg_len):
+                attn_weights = self.attention(hidden[-1], encoder_outputs)  # [batch_size, src_len]
+                attn_weights = attn_weights.unsqueeze(1)  # [batch_size, 1, src_len]
+
+                context = torch.bmm(attn_weights, encoder_outputs)  # [batch_size, 1, hidden_dim]
+                
+                # Combinar context + input y reducir a embedding_dim
+                decoder_input_combined = torch.cat((decoder_input, context), dim=2)  # [batch_size, 1, 768]
+                decoder_input_combined = torch.tanh(self.attn_combine(decoder_input_combined))  # [batch_size, 1, 256]
+
+                decoder_output, (hidden, cell) = self.decoder_lstm(decoder_input_combined, (hidden, cell))
+
+                # (Opcional) También podés usar el contexto otra vez en la salida final:
+                output = self.fc_out(decoder_output.squeeze(1))  # o: torch.cat((decoder_output, context), dim=2)
+
+                outputs[:, t, :] = output
+                decoder_input = trg_embedded[:, t, :].unsqueeze(1)
+
+
+            return outputs
 
     # Paso 3: Entrenamiento del modelo
     import torch.optim as optim
 
     # Hiperparámetros
-    embedding_dim = 256
-    hidden_dim = 512
+    embedding_dim = 128
+    hidden_dim = 256
     n_layers = 2
     dropout = 0.1
     lr = 0.001
@@ -215,7 +260,7 @@ try:
             print("⚠️ No se encontró el token <PAD> en el vocabulario de español.")
             # Puedes asignar un valor de relleno a <PAD> si no está
             spanish_vocab['<PAD>'] = len(spanish_vocab)
-        print("Es en el punto 1")
+
         X_val_tensor_path = os.path.join(current_dir,"../model/X_val_tensor.pt")
         y_val_tensor_path = os.path.join(current_dir,"../model/y_val_tensor.pt")
         # Cargar tensores de validación si existen
@@ -227,9 +272,8 @@ try:
             print("⚠️ Tensores de validación no encontrados. Necesitas generarlos primero.")
             return
         
-        print("antes de crossentropyloss")
         criterion = nn.CrossEntropyLoss(ignore_index=spanish_vocab['<PAD>'])
-        print("después de crossentropyloss")
+        
         while True:
             df = load_data_from_sqlite(conn, db_path, min_score, batch_size, offset)
             if df.empty:
@@ -316,7 +360,7 @@ try:
 
         with open("spanish_vocab.pkl", "wb") as f:
             pickle.dump(spanish_vocab, f)
-    print("Es en el punto 2")
+
     X_val_tensor_path = os.path.join(current_dir, "..","model","X_val_tensor.pt")
     y_val_tensor_path = os.path.join(current_dir, "../model/y_val_tensor.pt")
     # Guardar tensores de validación (solo la primera vez)
@@ -325,7 +369,7 @@ try:
     print("✅ Tensores de validación guardados.")
 
     # Entrenar el modelo
-    train_model_incrementally(model, db_path, batch_size=2000, min_score=1.1, num_epochs=20, checkpoint_interval=5)
+    train_model_incrementally(model, db_path, batch_size=1000, min_score=1.1, num_epochs=20, checkpoint_interval=5)
 
     # Paso 4: Generar traducciones
     def translate(model, sentence, vocab, max_len=50):
